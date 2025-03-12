@@ -78,7 +78,6 @@ async def obtener_problema():
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=head) as response:
             data = await response.json(content_type=None)
-            print(data)
             return data
         
 
@@ -101,7 +100,7 @@ async def obtener_pokemon_info(url):
 async def request_repository():
 
     global dic_personajes_repositorio, dic_planetas_repositorio , dic_pokemon_repositorio
-
+     
     planetas_data, personajes_data, pokemon_data= await asyncio.gather(
         obtener_planetas_star_war(),
         obtener_personajes_star_war(),
@@ -113,6 +112,7 @@ async def request_repository():
         indexar_repositorio_personaje(personajes_data),
         indexar_repositorio_pokemon(pokemon_data)
     )
+ 
     dic_planetas_repositorio = dic_planetas
     dic_personajes_repositorio = dic_personajes
     dic_pokemon_repositorio = dic_pokemon
@@ -122,69 +122,61 @@ async def request_repository():
 async def verificacion_problema():
     await request_repository()
 
-    problema = await obtener_problema()
 
-    id = problema['id']
-    solucion =problema['solution']
+    start_time = time.time()
+    count = 0
+    while time.time() - start_time < 120: 
+        problema = await obtener_problema()
+        id = problema['id']
+        solucion =problema['solution']
+        count += 1
+        print("peticion",count)
+        print(solucion)
 
-    print(solucion)
+        respuesta = await extraccion_data_ia(problema)
+        operacion = respuesta['operacion']
+        print("esta es la operacion ============>",operacion)
+        
+        task_buscar = await buscar(respuesta, dic_personajes_repositorio, dic_planetas_repositorio, dic_pokemon_repositorio)
+        
+        search =  await search_pokemon(task_buscar)
 
-    respuesta = await extraccion_data_ia(problema)
-    operacion = respuesta['operacion']
-    print("esta es la operacion ============>",operacion)
+        resultado = await evaluar_operacion(search,operacion)
+        await asyncio.sleep(5)
     
-    task_buscar = asyncio.create_task(buscar(respuesta, dic_personajes_repositorio, dic_planetas_repositorio, dic_pokemon_repositorio))
-    
-    search = await task_buscar
-
-    search_poke = await search_pokemon(search) 
-    resultado = await evaluar_operacion(search_poke, operacion)
 
     #print(resultado)
 
 
 
-async def evaluar_operacion_async(search_poke, operacion):
-    loop = asyncio.get_running_loop()
-    with ProcessPoolExecutor() as pool:
-        return await loop.run_in_executor(pool, evaluar_operacion, search_poke, operacion)
-
-
 
 async def evaluar_operacion(data,operacion):
     try:
-      
+        print("entrrooooooooooooooooo")
+        print("esta es la", operacion)
         variables = re.findall(r"([\w-]+)\.(\w+)", operacion)
+
+        print("estas son las",variables)
 
         valores = {}
         for obj, attr in variables:
-            # Buscar en personajes
-            if obj in data["personajes_star_wars"] and attr in data["personajes_star_wars"][obj]:
-                valores[f"{obj}.{attr}"] = data["personajes_star_wars"][obj][attr]
             
-            # Buscar en planetas
-            elif obj in data["planetas_star_wars"] and attr in data["planetas_star_wars"][obj]:
-                valores[f"{obj}.{attr}"] = data["planetas_star_wars"][obj][attr]
+            if obj in data.get("personajes_star_wars", {}) and attr in data["personajes_star_wars"][obj]:
+                valores[f"{obj}.{attr}"] = data["personajes_star_wars"][obj][attr]
+            elif obj in data.get("planetas_star_wars", {}) and attr in data["planetas_star_wars"][obj]:
+               valores[f"{obj}.{attr}"] = data["planetas_star_wars"][obj][attr]
 
-
-            elif obj in data["pokemon"] and attr in data["pokemon"][obj]:
+            elif obj in data.get("pokemon", {}) and attr in data["pokemon"][obj]:
                 valores[f"{obj}.{attr}"] = data["pokemon"][obj][attr]
         
-        print("esto son los valores   ====",valores)
-        print("esto son las variables  ====",variables)
-         
-     
-        # Reemplazar en la operación los valores encontrados
+       
         for key, value in valores.items():
-            #if isinstance(value, str) and value.isdigit():  # Convertir strings numéricos
             value = float(value)
             value = round(value, 10)  
 
             operacion = operacion.replace(key, f"{value:.10f}")  
-             #operacion = operacion.replace(key, str(value))
 
 
-        # Evaluar la operación
         resultado = eval(operacion)
         print("esssssssssssssssste es ", resultado)
         return resultado
@@ -192,8 +184,6 @@ async def evaluar_operacion(data,operacion):
         
     except Exception as e:
         return f"Error al evaluar la operación: {e}"
-
-
 
 
 async def extraccion_data_ia(problema_data):
@@ -218,7 +208,6 @@ async def indexar_repositorio_pokemon (clave):
 
 
 def convertir_dic(texto):
-    print("Tipo de texto recibido:", type(texto))
     if not isinstance(texto, str):
         raise ValueError("El texto proporcionado no es una cadena válida.")
 
@@ -302,7 +291,6 @@ async def genera(prompt):
 
             data = await response.json()
             response_text = data["choices"][0]["message"]["content"]
-            print("esta es la respuesta", response_text)
             return convertir_dic(response_text)
         
 
