@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import json
 import time
 import re
-
+from APIClient import APIClient
 
 load_dotenv()
 
@@ -17,72 +17,11 @@ url_pokemon = "https://pokeapi.co/api/v2/pokemon?limit=100000&offset=0"
 
 dic_personajes_repositorio = {}
 dic_planetas_repositorio = {}
-dic_pokemon_repositorio = {}
+client = APIClient(token)
 
-
-async def obtener_personajes_star_war():
-    url = url_star_war + "people/"
-    personajes = []
-
-    async with aiohttp.ClientSession() as session:
-        while url:
-            try:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        print(f" Error en la solicitud: {response.status}")
-                        return []
-
-                    data = await response.json()
-                    personajes.extend(data.get("results", []))
-                    url = data.get("next")  
-
-            except aiohttp.ClientError as e:
-                print(f" Error de conexión: {e}")
-                return []
-
-    return personajes
-
-async def obtener_planetas_star_war():
-    url = url_star_war + "planets/"
-    planetas = []
-
-    async with aiohttp.ClientSession() as session:
-        while url:
-            try:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        print(f" Error en la solicitud: {response.status}")
-                        return []
-
-                    data = await response.json()
-                    planetas.extend(data.get("results", []))
-                    url = data.get("next")  
-
-            except aiohttp.ClientError as e:
-                print(f" Error de conexión: {e}")
-                return []
-
-    return planetas
-        
-
-
-async def obtener_pokemon():
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_pokemon) as response:
-            data = await response.json(content_type=None)
-            return data.get("results", [])
-        
-        
-async def obtener_problema():
-    url = "https://recruiting.adere.so/challenge/test"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=head) as response:
-            data = await response.json(content_type=None)
-            return data
-        
-
-async def obtener_pokemon_info(url):
+async def obtener_pokemon_info(nombre_pokemon):
     """ Realiza una petición a la API de Pokémon para obtener detalles. """
+    url = f"https://pokeapi.co/api/v2/pokemon/{nombre_pokemon}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status == 200:
@@ -96,68 +35,103 @@ async def obtener_pokemon_info(url):
             else:
                 return "Información no disponible"
 
+async def enviar_solucion(datos):
+    """ Envía la solución mediante una petición POST. """
+    url = "https://recruiting.adere.so/challenge/solution"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url,headers=head, json=datos) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                return {"error": "No se pudo enviar la solución", "status": response.status}
+
+
+
 
 async def request_repository():
 
     global dic_personajes_repositorio, dic_planetas_repositorio , dic_pokemon_repositorio
-     
-    planetas_data, personajes_data, pokemon_data= await asyncio.gather(
-        obtener_planetas_star_war(),
-        obtener_personajes_star_war(),
-        obtener_pokemon()
+
+    planetas_data, personajes_data= await asyncio.gather(
+        client.obtener_planetas_star_war(),
+        client.obtener_personajes_star_war(),
     )
 
-    dic_planetas, dic_personajes,dic_pokemon = await asyncio.gather(
+    dic_planetas, dic_personajes = await asyncio.gather(
         indexar_repositorio_planeta(planetas_data),
         indexar_repositorio_personaje(personajes_data),
-        indexar_repositorio_pokemon(pokemon_data)
     )
  
     dic_planetas_repositorio = dic_planetas
     dic_personajes_repositorio = dic_personajes
-    dic_pokemon_repositorio = dic_pokemon
 
-
- 
+'''
 async def verificacion_problema():
     await request_repository()
-
-
     start_time = time.time()
     count = 0
-    while time.time() - start_time < 120: 
-        problema = await obtener_problema()
+    while time.time() - start_time < 180: 
+        problema = await client.obtener_problema()
         id = problema['id']
-        solucion =problema['solution']
         count += 1
-        print("peticion",count)
-        print(solucion)
-
+        print(f"Petición {count} - ID problema: {id}")
         respuesta = await extraccion_data_ia(problema)
+        
         operacion = respuesta['operacion']
-        print("esta es la operacion ============>",operacion)
-        
-        task_buscar = await buscar(respuesta, dic_personajes_repositorio, dic_planetas_repositorio, dic_pokemon_repositorio)
-        
-        search =  await search_pokemon(task_buscar)
+        if isinstance(operacion, list):
+            operacion = " ".join(map(str, operacion)) 
 
+        respuesta_buscar = await buscar(respuesta, dic_personajes_repositorio, dic_planetas_repositorio)
+        search =  await search_pokemon(respuesta,respuesta_buscar)
         resultado = await evaluar_operacion(search,operacion)
-        await asyncio.sleep(5)
     
+        await post_solicitud(id,resultado)
 
-    #print(resultado)
+    await asyncio.sleep(6)
+'''
+async def verificacion_problema():
+    await request_repository()
+    start_time = time.time()
+    count = 0
 
+    while time.time() - start_time < 180:  
+        try:
+            problema = await client.obtener_problema()
+            id = problema['id']
+            count += 1
+            print(f"Petición {count} - ID problema: {id}")
+
+            respuesta = await extraccion_data_ia(problema)
+            operacion = respuesta['operacion']
+            if isinstance(operacion, list):
+                operacion = " ".join(map(str, operacion)) 
+
+            respuesta_buscar = await buscar(respuesta, dic_personajes_repositorio, dic_planetas_repositorio)
+            search = await search_pokemon(respuesta, respuesta_buscar)
+            resultado = await evaluar_operacion(search, operacion)
+
+            await post_solicitud(id, resultado)
+
+        except Exception as e:
+            print(f" Error en la verificación del problema: {e}")
+
+        await asyncio.sleep(6)  
+
+
+async def post_solicitud (id,answer):
+    data= {
+        "problem_id":str(id),
+        "answer": float(answer)  
+        }
+    await enviar_solucion(data)
+    respuesta = await enviar_solucion(data)
+    print("Respuesta del servidor:", respuesta)    
 
 
 
 async def evaluar_operacion(data,operacion):
     try:
-        print("entrrooooooooooooooooo")
-        print("esta es la", operacion)
         variables = re.findall(r"([\w-]+)\.(\w+)", operacion)
-
-        print("estas son las",variables)
-
         valores = {}
         for obj, attr in variables:
             
@@ -169,13 +143,12 @@ async def evaluar_operacion(data,operacion):
             elif obj in data.get("pokemon", {}) and attr in data["pokemon"][obj]:
                 valores[f"{obj}.{attr}"] = data["pokemon"][obj][attr]
         
-       
         for key, value in valores.items():
             value = float(value)
             value = round(value, 10)  
 
             operacion = operacion.replace(key, f"{value:.10f}")  
-
+             
 
         resultado = eval(operacion)
         print("esssssssssssssssste es ", resultado)
@@ -183,7 +156,7 @@ async def evaluar_operacion(data,operacion):
     
         
     except Exception as e:
-        return f"Error al evaluar la operación: {e}"
+        print(f"Error al generar la solución de la evaluacion: {e}")
 
 
 async def extraccion_data_ia(problema_data):
@@ -206,7 +179,6 @@ async def indexar_repositorio_pokemon (clave):
     return {p["name"].lower().replace(" ", ""): p for p in clave}
 
 
-
 def convertir_dic(texto):
     if not isinstance(texto, str):
         raise ValueError("El texto proporcionado no es una cadena válida.")
@@ -226,11 +198,10 @@ def convertir_dic(texto):
         raise ValueError("Error al convertir el texto en un diccionario JSON.")
 
 
-async def buscar(respuesta_dic, dic_personajes_repositorio, dic_planetas_repositorio, dic_pokemon_repositorio):
+async def buscar(respuesta_dic, dic_personajes_repositorio, dic_planetas_repositorio):
     categorias = {
         "personajes_star_wars": dic_personajes_repositorio,
         "planetas_star_wars": dic_planetas_repositorio,
-        "pokemon": dic_pokemon_repositorio,
     }
 
     resultado = {}
@@ -247,24 +218,25 @@ async def buscar(respuesta_dic, dic_personajes_repositorio, dic_planetas_reposit
 
 
 
-async def search_pokemon(resultado):
-    """ Busca la URL del Pokémon en el diccionario y obtiene su información. """
-    if "pokemon" in resultado:
-        pokemon_data = resultado["pokemon"]
-        tareas = []
-
-        for nombre, datos in pokemon_data.items():
-            if isinstance(datos, dict) and "url" in datos:
-                tareas.append(obtener_pokemon_info(datos["url"]))
+async def search_pokemon(resultado, data):
+    if "pokemon" in resultado and resultado["pokemon"]:
+        pokemon_nombres = resultado["pokemon"]
+        peticion = [obtener_pokemon_info(nombre) for nombre in pokemon_nombres]
         
-        resultados_pokemon = await asyncio.gather(*tareas)
+        resultados_pokemon = await asyncio.gather(*peticion)
 
-        for (nombre, datos), info in zip(pokemon_data.items(), resultados_pokemon):
-            if isinstance(datos, dict) and "url" in datos:
-                resultado["pokemon"][nombre] = info
+        data["pokemon"] = {
+            nombre: info for nombre, info in zip(pokemon_nombres, resultados_pokemon)
+        }
+    ''' 
+       
+    
+    # Unir con data
+    data.update(resultado)
+    '''
+  
 
-    return resultado
-
+    return data
 
 
 
