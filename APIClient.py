@@ -30,7 +30,7 @@ class APIClient:
                             return []
                         data = await response.json()
                         data_list.extend(data.get("results", []))
-                        url = data.get("next")  # URL de la siguiente página
+                        url = data.get("next")  
                 except aiohttp.ClientError as e:
                     print(f"Error de conexión: {e}")
                     return []

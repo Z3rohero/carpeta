@@ -65,34 +65,12 @@ async def request_repository():
     dic_planetas_repositorio = dic_planetas
     dic_personajes_repositorio = dic_personajes
 
-'''
+
 async def verificacion_problema():
     await request_repository()
     start_time = time.time()
     count = 0
-    while time.time() - start_time < 180: 
-        problema = await client.obtener_problema()
-        id = problema['id']
-        count += 1
-        print(f"Petición {count} - ID problema: {id}")
-        respuesta = await extraccion_data_ia(problema)
-        
-        operacion = respuesta['operacion']
-        if isinstance(operacion, list):
-            operacion = " ".join(map(str, operacion)) 
-
-        respuesta_buscar = await buscar(respuesta, dic_personajes_repositorio, dic_planetas_repositorio)
-        search =  await search_pokemon(respuesta,respuesta_buscar)
-        resultado = await evaluar_operacion(search,operacion)
-    
-        await post_solicitud(id,resultado)
-
-    await asyncio.sleep(6)
-'''
-async def verificacion_problema():
-    await request_repository()
-    start_time = time.time()
-    count = 0
+    solicitudes = [] 
 
     while time.time() - start_time < 180:  
         try:
@@ -102,6 +80,7 @@ async def verificacion_problema():
             print(f"Petición {count} - ID problema: {id}")
 
             respuesta = await extraccion_data_ia(problema)
+           # print("Respuesta IA",respuesta)
             operacion = respuesta['operacion']
             if isinstance(operacion, list):
                 operacion = " ".join(map(str, operacion)) 
@@ -112,12 +91,16 @@ async def verificacion_problema():
 
             await post_solicitud(id, resultado)
 
+            #solicitud = asyncio.create_task(post_solicitud(id, resultado))
+            #solicitudes.append(solicitud)  # Almacenar la tarea para que se pueda esperar después
+
         except Exception as e:
             print(f" Error en la verificación del problema: {e}")
 
-        await asyncio.sleep(6)  
+    #await asyncio.gather(*solicitudes)
 
 
+    
 async def post_solicitud (id,answer):
     data= {
         "problem_id":str(id),
@@ -131,24 +114,49 @@ async def post_solicitud (id,answer):
 
 async def evaluar_operacion(data,operacion):
     try:
-        variables = re.findall(r"([\w-]+)\.(\w+)", operacion)
+      
+        patron = re.compile(r"([\w-]+)\.([\w-]+)")
+        variables = [(m.group(1), m.group(2)) for m in patron.finditer(operacion)]
+        
         valores = {}
         for obj, attr in variables:
-            
+            value = None 
+        
             if obj in data.get("personajes_star_wars", {}) and attr in data["personajes_star_wars"][obj]:
-                valores[f"{obj}.{attr}"] = data["personajes_star_wars"][obj][attr]
+                value = data["personajes_star_wars"][obj][attr]
             elif obj in data.get("planetas_star_wars", {}) and attr in data["planetas_star_wars"][obj]:
-               valores[f"{obj}.{attr}"] = data["planetas_star_wars"][obj][attr]
+                value = data["planetas_star_wars"][obj][attr]
 
             elif obj in data.get("pokemon", {}) and attr in data["pokemon"][obj]:
-                valores[f"{obj}.{attr}"] = data["pokemon"][obj][attr]
-        
-        for key, value in valores.items():
-            value = float(value)
-            value = round(value, 10)  
+                value= data["pokemon"][obj][attr]
 
-            operacion = operacion.replace(key, f"{value:.10f}")  
-             
+            '''
+
+            if obj in data['personajes_star_wars'] and attr in data['personajes_star_wars'][obj]:
+                value = data['personajes_star_wars'][obj][attr]
+
+
+            elif obj in data['planetas_star_wars'] and attr in data['planetas_star_wars'][obj]:
+                value = data['personajes_star_wars'][obj][attr]
+
+            elif obj in data['pokemon'] and attr in data['pokemon'][obj]:
+                value = data['pokemon'][obj][attr]
+
+            else:
+                value = None
+
+            '''
+
+            if value is not None:
+                value = str(value).replace(',', '.')
+                value = float(value)
+                value = round(value, 10)
+                valores[f"{obj}.{attr}"] = value
+                operacion = operacion.replace(f"{obj}.{attr}", f"{value:.10f}")
+            else:
+                print(f"Advertencia: no se encontró el valor para {obj}.{attr}")
+
+        
 
         resultado = eval(operacion)
         print("esssssssssssssssste es ", resultado)
@@ -157,7 +165,7 @@ async def evaluar_operacion(data,operacion):
         
     except Exception as e:
         print(f"Error al generar la solución de la evaluacion: {e}")
-
+        return 987654.321
 
 async def extraccion_data_ia(problema_data):
     
@@ -228,13 +236,7 @@ async def search_pokemon(resultado, data):
         data["pokemon"] = {
             nombre: info for nombre, info in zip(pokemon_nombres, resultados_pokemon)
         }
-    ''' 
-       
-    
-    # Unir con data
-    data.update(resultado)
-    '''
-  
+   
 
     return data
 
@@ -270,8 +272,9 @@ async def build_prompt(description):
     
     return f"""
      Tarea: Extraer palabras clave del siguiente texto y clasificarlas en tres categorías:
-        - Planetas de Star Wars (Ejemplos: Tatooine, Endor, Coruscant, Hoth, Naboo, etc.).
-        - Personajes de Star Wars (Ejemplos: Luke Skywalker, Darth Vader, Yoda, Leia Organa, Han Solo, etc.).
+        - Planetas de Star Wars (Ejemplos: Tatooine, Endor, Coruscant, Hoth, Naboo, etc.),basate en los nombres oficiales de "Wookieepedia"..
+        - Personajes de Star Wars (Ejemplos: Luke Skywalker, Darth Vader, Yoda, Leia Organa, Han Solo, Poggle the Lesser,Dooku
+          Palpatine,IG-88,Ratts Tyerel,Grievous,Ackbar, C-3PO,etc.), basate en los nombres oficiales de "Wookieepedia". 
         - Pokémon (Ejemplos: Pikachu, Charizard, Bulbasaur, Mewtwo, etc.).
 
         Cada objeto identificado debe estructurarse con sus atributos clave.  
@@ -312,9 +315,37 @@ async def build_prompt(description):
 
         La salida debe estar en formato JSON con tres listas:  
         - "planetas_star_wars" → Contiene los nombres de los planetas encontrados en miniscula y sin espacio . . 
-        - "personajes_star_wars" → Contiene los nombres de los personajes encontrados en miniscula y sin espacio.  
+        - "personajes_star_wars" → Contiene los nombres de los personajes encontrados en minúscula, sin espacio y sin puntos.  
+            Si encuentras al personaje **IG-88**, déjalo con el nombre **ig-88**.  
+            Si encuentras a **Poggle the Lesser**, déjalo con el nombre **pogglethelesser**.  
+            Si encuentras a **Obi-Wan Kenobi**, déjalo con el nombre **obi-wankenobi**.  
+            Si encuentras a **Ki-Adi-Mundi**, déjalo con el nombre **ki-adi-mundi**.  
+            Si encuentras a **Jek Tono Porkins**, déjalo con el nombre **jektonoporkins**.  
+            Si encuentras a ** Qui Gon Jinn**, déjalo con el nombre ** qui-gonjinn**.  
+            Si encuentras a ** R2-D2**, déjalo con el nombre **r2-d2**. 
+            Si encuentras a ** Padmé Amidala**, déjalo con el nombre **padméamidala**. 
+            Si encuentras a ** Wicket Systri Warwick**, déjalo con el nombre **wicketsystriwarrick**.  
+ 
+ 
+            Si el nombre viene con un "guion", deja el guion en nombre, no lo "elimines" 
+            No incluyas "almirante" , "general" o "Conde" , solo el nombre.  
+            Basate en los nombres oficiales de "Wookieepedia".
         - "pokemon" → Contiene los nombres de los Pokémon encontrados en miniscula y sin espacio.  
-        - "operacion" → Contiene la operacion aritmetica que esta solicitando para responder para el ejemplo era lukeskywalker.mass * vulpix.base_experience
+        - "operacion" → Contiene la operacion aritmetica que esta solicitando para responder para el ejemplo era lukeskywalker.mass * vulpix.base_experience, 
+                        colocar lo nombres  basado en los nombres  planetas_star_wars ,  pokemon , personajes_star_wars con sus atributos 
+                        Si encuentras al personaje **IG-88**, déjalo con el nombre **ig-88**.  
+                        Si encuentras a **Poggle the Lesser**, déjalo con el nombre **pogglethelesser**.  
+                        Si encuentras a **Obi-Wan Kenobi**, déjalo con el nombre **obi-wankenobi**.  
+                        Si encuentras a **Ki-Adi-Mundi**, déjalo con el nombre **ki-adi-mundi**.  
+                        Si encuentras a **Jek Tono Porkins**, déjalo con el nombre **jektonoporkins**.  
+                        Si encuentras a ** Qui Gon Jinn**, déjalo con el nombre ** qui-gonjinn**.  
+                        Si encuentras a ** R2-D2**, déjalo con el nombre **r2-d2**.  
+                        Si encuentras a ** Padmé Amidala**, déjalo con el nombre **padméamidala**.  
+                        Si encuentras a ** Wicket Systri Warwick**, déjalo con el nombre **wicketsystriwarrick**.  
+
+                        Si el nombre viene con un "guion", deja el guion en nombre, no lo "elimines" 
+                        No incluyas "almirante" , "general" o "Conde" , solo el nombre. 
+
 
         Si no se encuentra ningún elemento en una categoría, la lista debe estar vacía.  
 
